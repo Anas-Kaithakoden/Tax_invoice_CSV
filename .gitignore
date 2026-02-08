@@ -1,4 +1,5 @@
 # Python
 
-*.pdf
+invoices/
 venv/
+__pycache__/

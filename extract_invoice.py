@@ -1,4 +1,7 @@
 import pdfplumber
+import os
+import csv
+import re
 
 # --------------------------------------------------
 # LABEL CONFIGURATION
@@ -27,6 +30,8 @@ COLUMN_TABLE_FIELDS = {
     "Total"
 }
 
+
+
 # --------------------------------------------------
 # HELPER FUNCTIONS
 # --------------------------------------------------
@@ -38,6 +43,26 @@ def clean(text):
 # POST-PROCESSING / NORMALIZATION
 def normalize_bill_data(value, mode):
     if not value:
+        return value
+
+    if mode == "invoice_no":
+        # Cut off at any known label
+        for label in ALL_LABELS:
+            idx = value.lower().find(label)
+            if idx != -1:
+                value = value[:idx]
+                break
+        value = value.strip()
+        # 1️⃣ Prefer PP + digits
+        pp_match = re.search(r"\bPP\d{6,}\b", value, re.IGNORECASE)
+        if pp_match:
+            return pp_match.group(0).upper()
+
+        # 2️⃣ Digits only → prepend PP
+        digit_match = re.search(r"\b\d{6,}\b", value)
+        if digit_match:
+            return "PP" + digit_match.group(0)
+
         return value
 
     if mode == "bill":
@@ -53,18 +78,24 @@ def normalize_bill_data(value, mode):
 # ! Text-based (non-scanned) PDF ---------------------------------------------------
 # --------------------------------------------------
 def text_based_pdf(file):
+    data = {}
+
     with pdfplumber.open(file) as pdf:
             page = pdf.pages[0]
             words = page.extract_words()
 
             for key, label in LABELS.items():
                 value = extract_value(page, words, label)
+                if label == "Invoice No":
+                    value = normalize_bill_data(value, "invoice_no")
                 if label in {"Bill From", "Bill To"}:
                     value = normalize_bill_data(value, "bill")
                 if label in {"Total"}:
                     value = normalize_bill_data(value, "total")
 
-                print(f"{key}: {value}")
+                data[key] = value
+
+    return data
 
 # --------------------------------------------------
 # LABEL DETECTION
@@ -179,18 +210,45 @@ def detect_pdf_type(pdf_path):
     return "scanned_pdf"            # image-only
 
 
+def process_invoice_folder(folder_path, output_csv="invoices.csv"):
+    rows = []
 
+    pdf_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".pdf")]
+
+    for filename in pdf_files:
+        file_path = os.path.join(folder_path, filename)
+
+        pdf_type = detect_pdf_type(file_path)
+
+        if pdf_type != "text_pdf":
+            print(f"Skipping scanned PDF: {filename}")
+            continue
+
+        row = text_based_pdf(file_path)
+        row["File_Name"] = filename   # helpful for traceability
+        rows.append(row)
+
+    if not rows:
+        print("No data extracted.")
+        return
+
+    write_to_csv(rows, output_csv)
+    
+def write_to_csv(rows, filename):
+    fieldnames = ["File_Name"] + list(LABELS.keys())
+
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"CSV saved as: {filename}")
 
 # ---------------- MAIN ----------------
 
 def main():
-    file = "invoice1.pdf"
-    pdf_type = detect_pdf_type(file)
-    if pdf_type == "text_pdf":
-        print("Text-based PDF → direct extraction")
-        text_based_pdf(file)
-    else:
-        print("Scanned PDF → OCR required")
+    folder = "invoices"
+    process_invoice_folder(folder, "output.csv")
 
     
     
