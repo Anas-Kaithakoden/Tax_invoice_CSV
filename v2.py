@@ -9,19 +9,14 @@ from PIL import Image
 import pytesseract
 from pdf2image import convert_from_path
 
-# Load API key
 load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# Model configuration - you can change this to use different models
-# Available Groq models: "llama-3.1-8b-instant", "llama-3.1-70b-versatile", "mixtral-8x7b-32768"
-AI_MODEL = "llama-3.3-70b-versatile"  # More powerful model for better reasoning
-
+AI_MODEL = "llama-3.3-70b-versatile"
 PDF_FOLDER = "invoices"
 OUTPUT_CSV = "output.csv"
-DEBUG_MODE = True  # Set to True to save extracted text for debugging
+DEBUG_MODE = True
 
-# Supported image formats
 IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif')
 
 FIELDS = [
@@ -41,224 +36,69 @@ FIELDS = [
 # OCR FUNCTIONS
 # ---------------------------
 def extract_text_from_image(image_path):
-    """
-    Extract text from image using Tesseract OCR.
-    
-    Args:
-        image_path: Path to image file
-    
-    Returns:
-        Extracted text string
-    """
     try:
         print(f"   🔍 Running OCR on image...")
-        
-        # Open image
-        img = Image.open(image_path)
-        
-        # Optional: Preprocess image for better OCR
-        # Convert to grayscale
-        img = img.convert('L')
-        
-        # Apply OCR with custom config for better accuracy
+        img = Image.open(image_path).convert('L')
         custom_config = r'--oem 3 --psm 6'
         text = pytesseract.image_to_string(img, config=custom_config)
-        
         print(f"   ✅ OCR completed: {len(text)} characters extracted")
         return text
-        
     except Exception as e:
         print(f"   ❌ OCR Error: {e}")
         return ""
 
 def is_scanned_pdf(pdf_path):
-    """
-    Check if PDF is scanned (image-based) or text-based.
-    
-    Args:
-        pdf_path: Path to PDF file
-    
-    Returns:
-        True if scanned/image-based, False if text-based
-    """
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            # Check first page
             first_page = pdf.pages[0]
             text = first_page.extract_text()
-            
-            # If very little text extracted, it's likely scanned
             if not text or len(text.strip()) < 50:
                 return True
-            
-            # Check if page has images (scanned PDFs are essentially images)
             images = first_page.images
             if len(images) > 0 and len(text.strip()) < 200:
                 return True
-            
         return False
-        
     except Exception as e:
         print(f"   ⚠️  Error checking PDF type: {e}")
         return False
 
 def extract_text_from_scanned_pdf(pdf_path):
-    """
-    Extract text from scanned PDF using OCR.
-    
-    Args:
-        pdf_path: Path to scanned PDF file
-    
-    Returns:
-        Extracted text string
-    """
     try:
         print(f"   🔍 Converting PDF to images for OCR...")
-        
-        # Convert PDF pages to images
         images = convert_from_path(pdf_path, dpi=300)
-        
         print(f"   📄 Processing {len(images)} page(s)...")
         
         full_text = []
-        
         for i, image in enumerate(images, start=1):
             print(f"   📖 OCR on page {i}/{len(images)}...")
-            
             full_text.append(f"\n--- PAGE {i} ---\n")
-            
-            # Convert to grayscale for better OCR
             image = image.convert('L')
-            
-            # Extract text with Tesseract
             custom_config = r'--oem 3 --psm 6'
             page_text = pytesseract.image_to_string(image, config=custom_config)
-            
             full_text.append(page_text)
         
         result = "\n".join(full_text)
         print(f"   ✅ OCR completed: {len(result)} characters extracted")
-        
         return result
-        
     except Exception as e:
         print(f"   ❌ OCR Error: {e}")
         return ""
 
-# ---------------------------
-# REGEX FALLBACK PATTERNS
-# ---------------------------
-def extract_gstin_with_regex(text):
-    """
-    Extract GSTIN using regex patterns.
-    GSTIN format: 2 digits + 10 alphanumeric + 1 letter + 1 digit + 1 letter + 1 alphanumeric
-    Example: 27AAPFU0939F1ZV
-    """
-    patterns = [
-        r'(?:GSTIN|GST\s*No|GST\s*IN|PAN)[\s:]+([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}[Z]{1}[A-Z0-9]{1})',
-        r'\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}[Z]{1}[A-Z0-9]{1})\b',
-        r'\b([0-9]{2}[A-Z0-9]{13})\b'
-    ]
-    
-    for pattern in patterns:
-        matches = re.findall(pattern, text, re.IGNORECASE)
-        if matches:
-            for match in matches:
-                gstin = match.upper()
-                if len(gstin) == 15 and gstin[:2].isdigit():
-                    return gstin
-    
-    return None
-
-def extract_invoice_number_with_regex(text):
-    """Extract invoice number using common patterns"""
-    patterns = [
-        r'(?:Invoice\s*(?:No|Number|#)[\s:]+)([A-Z0-9\-/]+)',
-        r'(?:Bill\s*(?:No|Number)[\s:]+)([A-Z0-9\-/]+)',
-        r'(?:Tax\s*Invoice[\s:]+)([A-Z0-9\-/]+)',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-    
-    return None
-
-def extract_date_with_regex(text):
-    """Extract date using common patterns"""
-    patterns = [
-        r'(?:Date[\s:]+)(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})',
-        r'(?:Invoice\s*Date[\s:]+)(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})',
-        r'\b(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\b',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
-    
-    return None
-
-def extract_buyer_gstin_with_regex(text):
-    """
-    Extract buyer's GSTIN specifically from 'Bill To' or 'Buyer' section.
-    Returns the GSTIN found in buyer section, not seller section.
-    """
-    buyer_section_patterns = [
-        r'(?:Bill\s*To|Buyer|Consignee|Ship\s*To)[\s\S]{0,500}?([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}[Z]{1}[A-Z0-9]{1})',
-    ]
-    
-    for pattern in buyer_section_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1).upper()
-    
-    all_gstins = re.findall(r'\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}[Z]{1}[A-Z0-9]{1})\b', text)
-    
-    if len(all_gstins) >= 2:
-        return all_gstins[1].upper()
-    elif len(all_gstins) == 1:
-        return all_gstins[0].upper()
-    
-    return None
-
-# ---------------------------
-# PDF TEXT EXTRACTION
-# ---------------------------
 def extract_text_from_pdf(pdf_path):
-    """
-    Extract text from PDF. Automatically detects if PDF is scanned and uses OCR.
-    
-    Args:
-        pdf_path: Path to PDF file
-    
-    Returns:
-        Extracted text string
-    """
-    # Check if PDF is scanned
     if is_scanned_pdf(pdf_path):
         print(f"   📸 Detected scanned PDF - using OCR")
         return extract_text_from_scanned_pdf(pdf_path)
     
-    # Regular text extraction for text-based PDFs
     print(f"   📝 Detected text-based PDF - using pdfplumber")
     full_text = []
     
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
             full_text.append(f"\n--- PAGE {i} ---\n")
-            
-            # Extract regular text
-            page_text = page.extract_text(
-                x_tolerance=2,
-                y_tolerance=3,
-                layout=True
-            )
+            page_text = page.extract_text(x_tolerance=2, y_tolerance=3, layout=True)
             if page_text:
                 full_text.append(page_text)
             
-            # Also extract tables explicitly
             tables = page.extract_tables()
             if tables:
                 full_text.append("\n[TABLES ON THIS PAGE]")
@@ -271,121 +111,104 @@ def extract_text_from_pdf(pdf_path):
     return "\n".join(full_text)
 
 # ---------------------------
-# SAFE JSON PARSER
+# AI EXTRACTION (SIMPLE)
 # ---------------------------
-def safe_json_extract(raw):
-    """Extract JSON from LLM response"""
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not match:
-        return None
+def extract_invoice_data_ai(text):
+    """
+    Send everything to AI and let it figure it out.
+    No regex, no complex rules, just AI doing its thing.
+    """
     
-    try:
-        return json.loads(match.group())
-    except json.JSONDecodeError:
-        return None
+    prompt = f"""You are a GST invoice data extraction expert. Extract fields from this OCR text that contains errors.
 
-# ---------------------------
-# TAX VALIDATION & FIXING
-# ---------------------------
-def validate_and_fix_taxes(data):
-    """Validate tax fields and fix common issues"""
-    for key in ["CGST", "SGST", "IGST"]:
-        if isinstance(data.get(key), str):
-            if data[key].lower() in ["null", "none", "n/a", ""]:
-                data[key] = None
-            else:
-                data[key] = re.sub(r'[₹$,\s]', '', data[key])
-    
-    cgst = data.get("CGST")
-    sgst = data.get("SGST")
-    igst = data.get("IGST")
-    
-    def is_valid_amount(val):
-        if val is None:
-            return False
-        try:
-            return float(val) > 0
-        except:
-            return False
-    
-    has_cgst_sgst = is_valid_amount(cgst) or is_valid_amount(sgst)
-    has_igst = is_valid_amount(igst)
-    
-    if has_cgst_sgst and has_igst:
-        cgst_sgst_total = float(cgst or 0) + float(sgst or 0)
-        igst_val = float(igst or 0)
-        
-        if cgst_sgst_total > igst_val:
-            data["IGST"] = None
-        else:
-            data["CGST"] = None
-            data["SGST"] = None
-    
-    return data
+CRITICAL: OCR ERRORS ARE PRESENT!
+- Lines may be garbled (e.g., "rata) 208 00] sao] 288920]" instead of "Total 2NOS 3,805.00 684.90 4,489.90")
+- Words may be misspelled (e.g., "Toas" instead of "Total Tax")
+- Numbers may have extra digits (e.g., "24,490.00" instead of "4,490.00")
 
-# ---------------------------
-# ENHANCED LLM EXTRACTION WITH FALLBACK
-# ---------------------------
-def extract_invoice_data_llama(text):
-    """Extract invoice data with improved prompting and regex fallback"""
-    
-    prompt = f"""You are an expert GST invoice data extraction system. Analyze the invoice carefully and extract accurate data.
+CURRENCY HANDLING:
+- Keep currency symbols/codes in the values (₹, $, RS, SAR, USD, etc.)
+- Format: "₹3,805.00" or "$1,234.56" or "SAR 500.00"
+- If no currency symbol visible, use numeric value only
 
-STEP-BY-STEP ANALYSIS REQUIRED:
+TAX TYPES (VERY IMPORTANT):
+- INTER-STATE invoices have ONLY "IGST" or "Total Tax" → extract as IGST, set CGST and SGST to null
+- INTRA-STATE invoices have "CGST" AND "SGST" separately → extract both, set IGST to null
+- NEVER calculate IGST from CGST+SGST or vice versa
+- NEVER combine tax values - extract exactly as shown in the invoice
+- If invoice shows "CGST: 342.45" and "SGST: 342.45", keep them separate, don't make IGST = 684.90
 
-1. **IDENTIFY SECTIONS**: First locate these sections in the invoice:
-   - Header: Invoice number, date
-   - Seller/Supplier section (top, has "From" or supplier details)
-   - Buyer section (has "Bill To", "Ship To", "Buyer", "Consignee")
-   - Items/Products table (line items with rates and quantities)
-   - Tax Summary section (bottom, shows tax breakdown)
-   - Grand Total section (final amount to pay)
+HOW TO EXTRACT CORRECTLY:
 
-2. **EXTRACT BUYER DETAILS** (NOT seller):
-   - Buyer_Name: Company name in "Bill To" or "Buyer" section
-   - Buyer_GSTIN: 15-digit GSTIN in buyer section (NOT the seller's GSTIN)
-   - Buyer_State: State mentioned in buyer address
+1. FIND THE LINE ITEMS TABLE (lines 18-21):
+   - Line 18: Item 1 with amounts
+   - Line 20: Item 2 with amounts  
+   - Line 21: TOTALS ROW (may be garbled like "rata) 208 00] sao] 288920]")
 
-3. **EXTRACT FINANCIAL VALUES** (be careful with totals):
-   - Taxable_Value: Sum of all taxable amounts BEFORE tax (look for "Taxable Amount", "Taxable Value", or sum of item amounts)
-   - CGST: Central GST amount in RUPEES (₹), NOT percentage (look in tax summary)
-   - SGST: State GST amount in RUPEES (₹), NOT percentage (look in tax summary)
-   - IGST: Integrated GST amount in RUPEES (₹), NOT percentage (look in tax summary)
-   - Total_Value: Final grand total AFTER all taxes (look for "Total", "Grand Total", "Amount Payable")
+2. PARSE THE TOTALS ROW (line 21):
+   Pattern: [quantity] [taxable_total] [tax_total] [grand_total]
+   
+   Look for 3-4 numbers in sequence. The LAST 3 numbers are:
+   - Third-last number = Taxable Value (before tax)
+   - Second-last number = Tax amount (IGST or CGST+SGST combined)
+   - Last number = Grand Total (after tax)
 
-4. **TAX LOGIC** (apply strictly):
-   - If invoice has CGST AND SGST → set IGST to null (intra-state transaction)
-   - If invoice has IGST → set both CGST and SGST to null (inter-state transaction)
-   - Tax amounts are ALWAYS in rupees/currency, NEVER percentages
+3. VERIFY WITH "TOTAL IN WORDS":
+   Find the line that says "Total in words : FOUR THOUSAND FOUR HUNDRED AND NINETY RUPEES"
+   This tells you the GRAND TOTAL = 4,490 (not 24,490 or 20,800)
+   Convert words to number and use this as Total_Value
 
-5. **COMMON MISTAKES TO AVOID**:
-   - Don't confuse tax rate (%) with tax amount (₹)
-   - Don't use seller's GSTIN as buyer's GSTIN
-   - Don't use item-level totals as invoice total
-   - Taxable Value ≠ Total Value (taxable is before tax, total is after tax)
-   - Make sure Taxable_Value + taxes ≈ Total_Value
+4. IDENTIFY TAX TYPE:
+   - Look for "CGST" keyword → if found, this is INTRA-STATE (extract CGST and SGST separately)
+   - Look for "IGST" or only "Total Tax" → if found, this is INTER-STATE (extract as IGST only)
+   - Check the line items table headers or tax summary section
 
-Return ONLY valid JSON (no explanation):
+5. EXTRACT TAX VALUES:
+   - If INTRA-STATE: Find "CGST Amount" and "SGST Amount" (usually equal amounts)
+   - If INTER-STATE: Use the total tax amount from totals row as IGST
+   - Do NOT calculate one from the other
+
+6. CALCULATE TAXABLE VALUE:
+   Taxable_Value = Total_Value - (IGST or CGST+SGST)
+   Example: 4,490 - 684.90 = 3,805.10
+
+7. DOUBLE-CHECK:
+   Taxable_Value + tax amounts should equal Total_Value
+   Example: 3,805 + 684.90 ≈ 4,490 ✓
+
+FIELDS TO EXTRACT:
+- Invoice_no: From line with "Invoice No."
+- Date: From line with "Invoice Date" (DD-MMM-YYYY format)
+- Buyer_Name: Company after "M/S" (NOT the seller at top)
+- Buyer_GSTIN: 15-char GSTIN after "M/S" line (second GSTIN, NOT first)
+- Buyer_State: From "Place of Supply" or buyer address
+- Taxable_Value: With currency symbol if present (e.g., "₹3,805.00")
+- CGST: With currency if present, or null if inter-state
+- SGST: With currency if present, or null if inter-state
+- IGST: With currency if present, or null if intra-state
+- Total_Value: With currency symbol (e.g., "₹4,490.00")
+
+Return ONLY JSON (no markdown):
 
 {{
-  "Invoice_no": "invoice number",
-  "Date": "DD-MMM-YYYY format",
-  "Buyer_Name": "buyer company name from Bill To section",
-  "Buyer_GSTIN": "15-char GSTIN from buyer section only",
-  "Buyer_State": "state name",
-  "Taxable_Value": "total taxable amount before tax",
+  "Invoice_no": "value",
+  "Date": "value",
+  "Buyer_Name": "value",
+  "Buyer_GSTIN": "value",
+  "Buyer_State": "value",
+  "Taxable_Value": "value with currency",
   "CGST": null,
   "SGST": null,
-  "IGST": null,
-  "Total_Value": "final grand total after all taxes"
+  "IGST": "value with currency",
+  "Total_Value": "value with currency"
 }}
 
-Invoice Text:
-{text}
-
-Think step-by-step, then return ONLY the JSON object."""
+INVOICE TEXT:
+{text}"""
 
     try:
+        print(f"\n   🤖 Sending to AI ({AI_MODEL})...")
+        
         response = client.chat.completions.create(
             model=AI_MODEL,
             messages=[{"role": "user", "content": prompt}],
@@ -394,39 +217,61 @@ Think step-by-step, then return ONLY the JSON object."""
         
         raw = response.choices[0].message.content.strip()
         
-        # Debug: Show AI's raw response
-        print(f"\n   🤖 AI Response Preview:")
-        preview = raw[:300] + "..." if len(raw) > 300 else raw
+        # Show preview
+        print(f"\n   📝 AI Response Preview:")
+        preview = raw[:400] + "..." if len(raw) > 400 else raw
         print(f"   {preview}\n")
         
-        data = safe_json_extract(raw)
+        # Extract JSON
+        raw = re.sub(r'```json\s*', '', raw)
+        raw = re.sub(r'```\s*', '', raw)
         
-        if data:
-            data = validate_and_fix_taxes(data)
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            data = json.loads(match.group())
             
-            # FALLBACK: Use regex if LLM missed critical fields
-            if not data.get("Buyer_GSTIN") or len(str(data.get("Buyer_GSTIN", ""))) != 15:
-                regex_gstin = extract_buyer_gstin_with_regex(text)
-                if regex_gstin:
-                    print(f"   🔧 Regex fallback: Found GSTIN = {regex_gstin}")
-                    data["Buyer_GSTIN"] = regex_gstin
+            # Keep currency symbols in the data - don't clean them
+            # Just ensure numeric fields are present
             
-            if not data.get("Invoice_no"):
-                regex_invoice = extract_invoice_number_with_regex(text)
-                if regex_invoice:
-                    print(f"   🔧 Regex fallback: Found Invoice# = {regex_invoice}")
-                    data["Invoice_no"] = regex_invoice
+            # Apply tax logic: IGST XOR (CGST+SGST) - never combine them
+            cgst = data.get("CGST")
+            sgst = data.get("SGST")
+            igst = data.get("IGST")
             
-            if not data.get("Date"):
-                regex_date = extract_date_with_regex(text)
-                if regex_date:
-                    print(f"   🔧 Regex fallback: Found Date = {regex_date}")
-                    data["Date"] = regex_date
-        
-        return data
-        
+            # Convert to float for comparison (strip currency symbols)
+            def to_float(val):
+                if val is None:
+                    return 0.0
+                try:
+                    cleaned = re.sub(r'[₹$,\s]', '', str(val))
+                    cleaned = re.sub(r'(RS|SAR|USD|AED|INR|EUR|GBP)', '', cleaned, flags=re.IGNORECASE)
+                    return float(cleaned.strip())
+                except:
+                    return 0.0
+            
+            cgst_f = to_float(cgst)
+            sgst_f = to_float(sgst)
+            igst_f = to_float(igst)
+            
+            # If AI mistakenly extracted both types, fix it based on which is larger
+            # But NEVER calculate IGST from CGST+SGST or vice versa
+            if igst_f > 0 and (cgst_f > 0 or sgst_f > 0):
+                total_cgst_sgst = cgst_f + sgst_f
+                if igst_f > total_cgst_sgst:
+                    print(f"   ⚠️  AI extracted both IGST and CGST/SGST - keeping IGST, removing others")
+                    data["CGST"] = None
+                    data["SGST"] = None
+                else:
+                    print(f"   ⚠️  AI extracted both IGST and CGST/SGST - keeping CGST/SGST, removing IGST")
+                    data["IGST"] = None
+            
+            return data
+        else:
+            print(f"   ❌ Could not find JSON in AI response")
+            return None
+            
     except Exception as e:
-        print(f"❌ LLM Error: {e}")
+        print(f"   ❌ AI Error: {e}")
         return None
 
 # ---------------------------
@@ -439,7 +284,6 @@ def main():
         print(f"❌ Folder '{PDF_FOLDER}' not found!")
         return
     
-    # Get all supported files (PDFs and images)
     all_files = os.listdir(PDF_FOLDER)
     supported_files = [
         f for f in all_files 
@@ -448,10 +292,9 @@ def main():
     
     if not supported_files:
         print(f"❌ No supported files found in '{PDF_FOLDER}'")
-        print(f"   Supported: PDF, PNG, JPG, JPEG, BMP, TIFF")
         return
     
-    print(f"\n🔍 Found {len(supported_files)} supported file(s)\n")
+    print(f"\n🔍 Found {len(supported_files)} file(s)\n")
     
     for filename in supported_files:
         file_path = os.path.join(PDF_FOLDER, filename)
@@ -460,107 +303,87 @@ def main():
         print(f"📄 Processing: {filename}")
         print("=" * 80)
         
-        # Determine file type and extract text accordingly
+        # Extract text
         if filename.lower().endswith('.pdf'):
             text = extract_text_from_pdf(file_path)
         elif filename.lower().endswith(IMAGE_EXTENSIONS):
             text = extract_text_from_image(file_path)
         else:
-            print(f"⚠️  Unsupported file type, skipping...")
             continue
         
         if not text or len(text.strip()) < 20:
-            print(f"⚠️  Very little text extracted - file may be blank or unreadable")
+            print(f"⚠️  Very little text extracted")
             continue
         
-        # Debug: Save extracted text
-        if DEBUG_MODE:
-            debug_file = f"debug_{filename}.txt"
-            with open(debug_file, "w", encoding="utf-8") as f:
-                f.write(text)
-            print(f"   💾 Debug: Extracted text saved to {debug_file}")
-        
-        # Truncate if too long
-        if len(text) > 15000:
-            print(f"⚠️  Text truncated ({len(text)} → 15000 chars)")
-            text = text[:15000]
-        
-        # Extract data
-        data = extract_invoice_data_llama(text)
+        # Let AI handle everything
+        data = extract_invoice_data_ai(text)
         
         if data:
             data["File_Name"] = filename
             rows.append(data)
             
-            print("✅ Extracted:")
+            print("\n" + "=" * 80)
+            print("✅ EXTRACTED DATA:")
+            print("=" * 80)
             for k in FIELDS:
                 val = data.get(k)
                 print(f"   {k:20s}: {val}")
             
-            # Validation check
-            print("\n   🔍 Validation Check:")
-            taxable = data.get("Taxable_Value")
-            cgst = data.get("CGST")
-            sgst = data.get("SGST")
-            igst = data.get("IGST")
-            total = data.get("Total_Value")
+            # Validation
+            print("\n" + "=" * 80)
+            print("🔍 VALIDATION:")
+            print("=" * 80)
             
-            # Convert to float for checking
-            def to_float(val):
+            # Extract numeric values for validation (remove currency symbols temporarily)
+            def extract_number(val):
                 if val is None:
                     return 0.0
                 try:
-                    # Remove common currency symbols and commas
-                    cleaned = str(val).replace('₹', '').replace(',', '').replace('$', '').strip()
-                    return float(cleaned)
+                    # Remove currency symbols and commas for calculation
+                    cleaned = re.sub(r'[₹$,\s]', '', str(val))
+                    # Remove currency codes like RS, SAR, USD, AED
+                    cleaned = re.sub(r'(RS|SAR|USD|AED|INR|EUR|GBP)', '', cleaned, flags=re.IGNORECASE)
+                    return float(cleaned.strip())
                 except:
                     return 0.0
             
-            taxable_f = to_float(taxable)
-            cgst_f = to_float(cgst)
-            sgst_f = to_float(sgst)
-            igst_f = to_float(igst)
-            total_f = to_float(total)
+            taxable = extract_number(data.get("Taxable_Value"))
+            cgst = extract_number(data.get("CGST"))
+            sgst = extract_number(data.get("SGST"))
+            igst = extract_number(data.get("IGST"))
+            total = extract_number(data.get("Total_Value"))
             
-            # Calculate expected total
-            expected_total = taxable_f + cgst_f + sgst_f + igst_f
+            expected = taxable + cgst + sgst + igst
             
-            print(f"   Taxable: ₹{taxable_f:,.2f}")
-            print(f"   + CGST: ₹{cgst_f:,.2f}")
-            print(f"   + SGST: ₹{sgst_f:,.2f}")
-            print(f"   + IGST: ₹{igst_f:,.2f}")
-            print(f"   = Expected: ₹{expected_total:,.2f}")
-            print(f"   Actual Total: ₹{total_f:,.2f}")
+            print(f"   Taxable Value: {data.get('Taxable_Value')}")
+            print(f"   + CGST:        {data.get('CGST')}")
+            print(f"   + SGST:        {data.get('SGST')}")
+            print(f"   + IGST:        {data.get('IGST')}")
+            print(f"   {'─' * 40}")
+            print(f"   = Expected:    {expected:,.2f}")
+            print(f"   Actual Total:  {data.get('Total_Value')}")
             
-            # Check if values make sense
-            diff = abs(expected_total - total_f)
-            if diff > 1.0:  # Allow ₹1 rounding difference
-                print(f"   ⚠️  WARNING: Math doesn't add up! Difference: ₹{diff:,.2f}")
-                print(f"   Please verify the extracted values manually.")
+            diff = abs(expected - total)
+            if diff < 1.0:
+                print(f"\n   ✅ PASS: Math checks out! (diff: {diff:.2f})")
             else:
-                print(f"   ✅ Math checks out! (Diff: ₹{diff:.2f})")
+                print(f"\n   ⚠️  WARNING: Difference of {diff:,.2f}")
+                print(f"      This may be due to OCR errors or rounding")
             
-            # Tax validation summary
-            cgst = data.get("CGST")
-            sgst = data.get("SGST")
-            igst = data.get("IGST")
-            
-            if cgst or sgst:
-                print(f"\n   📊 Tax Type: CGST/SGST (Intra-state)")
-            elif igst:
+            # Tax type
+            if igst > 0:
                 print(f"\n   📊 Tax Type: IGST (Inter-state)")
-            else:
-                print(f"\n   ⚠️  No tax values extracted")
+            elif cgst > 0 or sgst > 0:
+                print(f"\n   📊 Tax Type: CGST/SGST (Intra-state)")
+            
+            print("=" * 80)
         else:
-            print("❌ Extraction failed - check file format or API response")
+            print("\n❌ Extraction failed - check AI response above")
     
     # Save results
     if rows:
         with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f, 
-                fieldnames=["File_Name"] + FIELDS
-            )
+            writer = csv.DictWriter(f, fieldnames=["File_Name"] + FIELDS)
             writer.writeheader()
             writer.writerows(rows)
         
@@ -569,7 +392,7 @@ def main():
         print(f"📁 Data saved to: {OUTPUT_CSV}")
         print(f"{'='*80}\n")
     else:
-        print("\n⚠️  No data extracted from any file\n")
+        print("\n⚠️  No data extracted from any files\n")
 
 if __name__ == "__main__":
     main()
